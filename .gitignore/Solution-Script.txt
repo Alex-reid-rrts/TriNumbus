@@ -1,0 +1,138 @@
+Notes:  https://stackoverflow.com/questions/42395691/how-to-register-an-ec2-instance-with-an-elbv2
+
+
+$AMI = "ami-4748cf23"
+
+
+$vpc = New-EC2Vpc -CidrBlock 10.11.0.0/16
+New-EC2DefaultVpc
+$subnet1 = New-EC2Subnet -VpcId $vpc.VpcID -CidrBlock 10.11.1.0/24 -AvailabilityZone ca-central-1b
+$subnet2 = New-EC2Subnet -VpcId $vpc.VpcID -CidrBlock 10.11.2.0/24 -AvailabilityZone ca-central-1a
+$inetgw1 = new-EC2InternetGateway 
+Add-EC2InternetGateway -VpcId $vpc.VpcID -InternetGatewayId $inetgw1.InternetGatewayID
+$RouteTable1 = Get-EC2RouteTable -Filter @{name="vpc-id";value=$vpc.vpcid}
+New-EC2Route -RouteTableId $RouteTable1.RouteTableID -DestinationCidrBlock 0.0.0.0/0 -GatewayId $inetgw1.InternetGatewayID
+$SG = New-EC2SecurityGroup -GroupName http_https_rdp -Description "http,https,rdp" -VpcId $vpc.VpcID 
+$ip1 = New-Object Amazon.EC2.Model.IpPermission
+$ip1.IpProtocol = "tcp"
+$ip1.FromPort = 3389
+$ip1.ToPort = 3389
+$ip1.IpRanges.Add("173.239.230.80/32")
+$ip2 = New-Object Amazon.EC2.Model.IpPermission
+$ip2.IpProtocol = "tcp"
+$ip2.FromPort = 80
+$ip2.ToPort = 80
+$ip2.IpRanges.Add("0.0.0.0/0")
+$ip3 = New-Object Amazon.EC2.Model.IpPermission
+$ip3.IpProtocol = "tcp"
+$ip3.FromPort = 443
+$ip3.ToPort = 443
+$ip3.IpRanges.Add("0.0.0.0/0")
+Grant-EC2SecurityGroupIngress -GroupId $SG -IpPermission @( $ip1, $ip2, $ip3 )
+
+$AMI = "ami-4748cf23"
+
+$guid1 = new-guid
+$guid2 = new-guid
+$tag1 = @{key="Function"; Value="WebServer" }
+$tag2 = @{key="ID"; Value=$guid1}
+$tagspec1 = new-object Amazon.EC2.Model.TagSpecification
+$tagspec1.ResourceType = "instance"
+$tagspec1.Tags.Add($tag1)
+$tagspec1.Tags.Add($tag2)
+New-EC2Instance -ImageId $AMI -KeyName "TriNumbuskeypair" -MaxCount 1 -InstanceType "t2.micro" -SubnetId $subnet1.SubnetID -TagSpecification $tagspec1 -SecurityGroupId $SG -AvailabilityZone ca-central-1b -InstanceProfile_Name System-Manager
+$tag1 = @{key="Function"; Value="WebServer"}
+$tag2 = @{key="ID"; Value=$guid2}
+$tagspec1 = new-object Amazon.EC2.Model.TagSpecification
+$tagspec1.ResourceType = "instance"
+$tagspec1.Tags.Add($tag1)
+$tagspec1.Tags.Add($tag2)
+New-EC2Instance -ImageId $AMI -KeyName "TriNumbuskeypair" -MaxCount 1 -InstanceType "t2.micro" -SubnetId $subnet2.SubnetID -TagSpecification $tagspec1 -SecurityGroupId $SG -AvailabilityZone ca-central-1a -InstanceProfile_Name System-Manager
+Sleep 240
+$EC2_1= (Get-EC2Instance -Filter @{name="tag-value";value =$guid1}).Instances
+$EC2_2= (Get-EC2Instance -Filter @{name="tag-value";value =$guid2}).Instances
+
+$pip1 = new-ec2address
+$pip2 = new-ec2address
+
+Register-EC2Address -instanceID $EC2_1.InstanceId -Allocationid $pip1.AllocationId
+Register-EC2Address -instanceID $EC2_2.InstanceId -Allocationid $pip2.AllocationId
+
+Sleep 120
+Send-SSMCommand -InstanceId $EC2_1.InstanceId -DocumentName AWS-RunPowerShellScript -Comment 'Install IIS' -Parameter @{'commands'=@('install-WindowsFeature -name Web-Server -IncludeManagementTools -restart')}
+
+Send-SSMCommand -InstanceId $EC2_2.InstanceId -DocumentName AWS-RunPowerShellScript -Comment 'Install IIS' -Parameter @{'commands'=@('install-WindowsFeature -name Web-Server -IncludeManagementTools -restart')}
+
+Sleep 120
+
+$command = Send-SSMCommand -InstanceId $EC2_1.InstanceId -DocumentName AWS-RunPowerShellScript -Comment 'Copy file from Github' -Parameter @{'commands'=@('[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest https://raw.githubusercontent.com/Alex-reid-rrts/TriNumbus/master/.gitignore/Test.html -OutFile C:\inetpub\wwwroot\Test.html')}
+
+$command = Send-SSMCommand -InstanceId $EC2_2.InstanceId -DocumentName AWS-RunPowerShellScript -Comment 'Copy file from Github' -Parameter @{'commands'=@('[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest https://raw.githubusercontent.com/Alex-reid-rrts/TriNumbus/master/.gitignore/Test.html -OutFile C:\inetpub\wwwroot\Test.html')}
+
+$command = Send-SSMCommand -InstanceId $EC2_1.InstanceId -DocumentName AWS-RunPowerShellScript -Comment 'Copy file from Github' -Parameter @{'commands'=@('new-item c:\scripts -type Directory ')}
+
+$command = Send-SSMCommand -InstanceId $EC2_1.InstanceId -DocumentName AWS-RunPowerShellScript -Comment 'Copy file from Github' -Parameter @{'commands'=@('[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest https://raw.githubusercontent.com/Alex-reid-rrts/TriNumbus/master/.gitignore/Alex-Test.rrts.ca.pfx -OutFile C:\scripts\Alex-Test.rrts.ca.pfx')}
+
+$command = Send-SSMCommand -InstanceId $EC2_1.InstanceId -DocumentName AWS-RunPowerShellScript -Comment 'Copy file from Github' -Parameter @{'commands'=@('[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest https://raw.githubusercontent.com/Alex-reid-rrts/TriNumbus/master/.gitignore/ImportCert.ps1 -OutFile C:\scripts\ImportCert.ps1')}
+
+
+$command = Send-SSMCommand -InstanceId $EC2_1.InstanceId -DocumentName AWS-RunPowerShellScript -Comment 'Copy file from Github' -Parameter @{'commands'=@('C:\scripts\ImportCert.ps1')}
+
+$command = Send-SSMCommand -InstanceId $EC2_2.InstanceId -DocumentName AWS-RunPowerShellScript -Comment 'Copy file from Github' -Parameter @{'commands'=@('new-item c:\scripts -type Directory ')}
+
+$command = Send-SSMCommand -InstanceId $EC2_2.InstanceId -DocumentName AWS-RunPowerShellScript -Comment 'Copy file from Github' -Parameter @{'commands'=@('[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest https://raw.githubusercontent.com/Alex-reid-rrts/TriNumbus/master/.gitignore/Alex-Test.rrts.ca.pfx -OutFile C:\scripts\Alex-Test.rrts.ca.pfx')}
+
+$command = Send-SSMCommand -InstanceId $EC2_2.InstanceId -DocumentName AWS-RunPowerShellScript -Comment 'Copy file from Github' -Parameter @{'commands'=@('[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest https://raw.githubusercontent.com/Alex-reid-rrts/TriNumbus/master/.gitignore/ImportCert.ps1 -OutFile C:\scripts\ImportCert.ps1')}
+
+$command = Send-SSMCommand -InstanceId $EC2_2.InstanceId -DocumentName AWS-RunPowerShellScript -Comment 'Copy file from Github' -Parameter @{'commands'=@('C:\scripts\ImportCert.ps1')}
+
+$ACMCert = import-ACMCertificate -Certificate ([System.IO.File]::ReadAllBytes("C:\trinimbus\Cert.perm")) -PrivateKey ([System.IO.File]::ReadAllBytes("C:\Trinimbus\Private.perm")) -CertificateChain ([System.IO.File]::ReadAllBytes("C:\Trinimbus\chain.perm"))
+
+$ELB2 = New-ELB2LoadBalancer -IpAddressType Ipv4 -Name ELB1 -Scheme internet-Facing -SecurityGroup $SG.GroupID -Subnet $Subnet1.SubnetID,$Subnet2.SubnetID -Type Application
+
+$ELBTARGET = New-ELB2TargetGroup -HealthCheckIntervalSecond 10 -HealthCheckPath / -HealthCheckProtocol HTTP -HealthCheckTimeoutSecond 10 -HealthyThresholdCount 5 -Matcher_HttpCode 200 -Port 80 -Protocol HTTP -UnhealthyThresholdCount 2 -VpcId vpc-e80efc80 -Name WEB-SERVERS
+
+
+$instance1 = New-Object Amazon.ElasticLoadBalancingV2.Model.TargetDescription
+$instance1.ID = $EC2_1.InstanceID
+$instance1.Port = 80
+Register-ELB2Target -TargetGroupArn $ELBTARGET.TargetGroupArn -Target $Instance1
+
+$instance2 = New-Object Amazon.ElasticLoadBalancingV2.Model.TargetDescription
+$instance2.ID = $EC2_2.InstanceID
+$instance2.Port = 80
+Register-ELB2Target -TargetGroupArn $ELBTARGET.TargetGroupArn -Target $Instance2
+
+$Cert1 = New-Object Amazon.ElasticLoadBalancingV2.Model.Certificate
+$Cert1.CertificateArn = $ACMCERT
+$Action1 = New-Object Amazon.ElasticLoadBalancingV2.Model.Action
+$Action1.TargetGroupArn = $ELBTARGET.TargetGroupArn
+$Action1.Type = "forward"
+New-ELB2Listener -LoadBalancerArn $ELB2.LoadBalancerARN -Certificate $CERT1 -Port 443 -Protocol https -DefaultAction $Action1
+New-ELB2Listener -LoadBalancerArn $ELB2.LoadBalancerARN -Port 80 -Protocol http -DefaultAction $Action1
+
+$DNSVALUE = $ELB.DNSName
+
+$DB1 = New-RDSDBInstance  -DBInstanceIdentifier alex-test-db -AvailabilityZone  ca-central-1b -Master
+Username alexSA -MasterUserPassword asdf159753852456 -Engine sqlserver-ex -EngineVersion 14.00.3015.40.v1 -PubliclyAcces
+sible 1 -DBInstanceClass db.t2.micro -AllocatedStorage 30
+$VPCID = $DB1.VpcSecurityGroups
+$SQLip3 = New-Object Amazon.EC2.Model.IpPermission
+$SQLip3.IpProtocol = "tcp"
+$SQLip3.FromPort = 1433
+$SQLip3.ToPort = 1433
+$SQLip3.IpRanges.Add("0.0.0.0/0")
+Grant-EC2SecurityGroupIngress -GroupId $VPCID.VpcSecurityGroupID -IpPermission @( $SQLip3)
+
+
+
+
+
+
+
+
+
+
+
+
+ 
